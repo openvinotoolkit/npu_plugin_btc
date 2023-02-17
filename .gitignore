@@ -1,0 +1,50 @@
+# Build results
+[Bb]uild/
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+
+# Executables
+*.app
+*.stackdump
+*.x
+
+# Klocwork files
+.kwlp
+.kwps
+kwtables
+*.out
+
+# temp MS office files
+~$*
+
+# Vim temporary files and lockfiles
+*~
+*.swp
+*.swo
+
+# python cache
+__pycache__
+
+# VSCode files
+.vscode
+
+# RAW files MUST be loaded to git lfs, they are NOT permitted in the repository:
+*.raw
+*.bin
+*.log
