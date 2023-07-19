@@ -10,21 +10,87 @@
 
 #include "bitCompactor.h"
 
+namespace btc27
+{
+// Logger macros
+#define BTC_REPORT_INFO(verbosity,lvl,message)  if (lvl <= verbosity) { REPORT_INFO("BitCompactor", message, Logger::Verbosity::HIGH); }
+#define BTC_REPORT_ERROR(message) { REPORT_ERROR("BitCompactor", message); }
+
+// Block Size
+#define BLKSIZE 64
+#define BIGBLKSIZE 4096
+// Dual Length Mode
+// Indicates if Bit length of the compressed data
+// should be included in the header
+#define DL_INC_BL
+// ALGO
+#define BITC_ALG_NONE 16
+#define LFTSHFTPROC 5
+#define BINEXPPROC 4
+#define BTEXPPROC 6
+#define ADDPROC 3
+#define SIGNSHFTADDPROC 2
+#define NOPROC 0
+#define SIGNSHFTPROC 1
+
+#define EOFR 0
+#define CMPRSD 3
+#define UNCMPRSD 2
+#define LASTBLK 1
+// Header bit positions index
+#define BITLN 5
+#define ALGO 2
+
+#define INCR_STATE_UC(state,len)  (*state)++; if(*state == 8) { *state = 0; (*len)++; }
+#define ELEM_SWAP(a,b) { register elem_type t=(a);(a)=(b);(b)=t; }
+
+//-----------------------------------------------------
+//64B block size related constants
+//-----------------------------------------------------
+// Count defined by BTC27_NUMALGO
+#define MINPRDCT_IDX 0
+#define MINSPRDCT_IDX 1
+#define MUPRDCT_IDX 2
+#define NOPRDCT_IDX 3
+#define NOSPRDCT_IDX 4
+#define MEDPRDCT_IDX 5
+#define BINCMPCT_IDX 6
+#define BTMAP_IDX 7
+
+#define MAXSYMS 16
+#define NUMSYMSBL 4
+//-----------------------------------------------------
+// 4K Block Size related constants
+//-----------------------------------------------------
+// Count defined by NUM4KALGO
+#define BINCMPCT4K_IDX 0
+#define BTMAP4K_IDX 1
+
+#define MAXSYMS4K 64
+#define NUMSYMSBL4K 6
+
+//-----------------------------------------------------
+
+// Alignment
+#define DEFAULT_ALIGN 1
+// 1 --> 32B Alignment
+// 2 --> 64B Alignment
+// 0 --> No  Alignment
+
+// Function Declarations
+
 BitCompactor::BitCompactor() :
         mVerbosityLevel(0)
 {
-    mBitCompactorConfig = new btcmpctr_args_t;
-
 }
 
 BitCompactor::~BitCompactor()
 {
-    delete mBitCompactorConfig;
 }
 
 unsigned char BitCompactor::btcmpctr_insrt_byte( unsigned char  byte,
                                    unsigned char  bitln,
-                                            int*  outBufLen,
+                                   unsigned int*  outBufLen,
                                    unsigned char* outBuf,
                                    unsigned char  state,
                                    unsigned int*  accum,
@@ -33,7 +99,7 @@ unsigned char BitCompactor::btcmpctr_insrt_byte( unsigned char  byte,
 {
     unsigned char mask, thisBit, rem;
     // Use 32bit operations to insert a byte into the accumulator
-    // Once 32bits are accumulated, push 4bytes to the outBuf 
+    // Once 32bits are accumulated, push 4bytes to the outBuf
     // and increment the outBufLen.
     #ifdef __BTCMPCTR__EN_DBG__
     mDebugStr.str(""); mDebugStr << "State = "<< std::to_string((int)state) << ", BitLen = "<< std::to_string(bitln) <<", Byte = "<< std::to_string(byte) <<", outByfLen = " << std::to_string(*outBufLen);
@@ -64,7 +130,7 @@ unsigned char BitCompactor::btcmpctr_insrt_byte( unsigned char  byte,
                 (*outBufLen) += numBytes;
             state = 0;
         }
-            
+
     } else {
         // State indicates the number of bits valid in accum.
         // First see if based on state and bitln we will cross
@@ -106,7 +172,7 @@ unsigned char BitCompactor::btcmpctr_insrt_byte( unsigned char  byte,
     //for(int j = 0; j < 8; j++) {
     //    if(j < bitln) {
     //        mask    = 1 << j;
-    //        thisBit = byte & mask; 
+    //        thisBit = byte & mask;
     //        thisBit = thisBit >> j;
     //        mask    = thisBit << state;
     //        outBuf[*outBufLen] |= mask;
@@ -122,7 +188,7 @@ unsigned char BitCompactor::btcmpctr_insrt_byte( unsigned char  byte,
 // Insert header into the output Buffer.
 unsigned char BitCompactor::btcmpctr_insrt_hdr(int chosenAlgo,
                                  unsigned char  bitln,
-                                          int*  outBufLen,
+                                 unsigned int*  outBufLen,
                                  unsigned char* outBuf,
                                  unsigned char  state,
                                  unsigned int*  accum,
@@ -194,7 +260,7 @@ unsigned char BitCompactor::btcmpctr_insrt_hdr(int chosenAlgo,
         return state;
     } else {
         // We are guarantteed to come in here when workingBlkSize != 64
-        // First form the header byte and then use a loop to insert it into 
+        // First form the header byte and then use a loop to insert it into
         // the output buffer.
         //Algo is 3 bits, hence mask off the rest of the bits from chosen Algo.
         state = btcmpctr_insrt_byte(CMPRSD,2,outBufLen,outBuf,state,accum,0);
@@ -220,15 +286,15 @@ unsigned char BitCompactor::btcmpctr_insrt_hdr(int chosenAlgo,
 }
 
 // Calculate minimum number of bits needed to represent all the numbers
-void BitCompactor::btcmpctr_calc_bitln(unsigned char* residual,
-                         unsigned char* bitln,
-                         int            blkSize,
-                         int*           minFixedBitLn
-                        )
+void BitCompactor::btcmpctr_calc_bitln( const unsigned char* residual,
+                                        unsigned char* bitln,
+                                        int            blkSize,
+                                        int            minFixedBitLn
+                                    )
 {
     uint16_t maximum = 0;
     for(int i = 0; i < blkSize; i++) { // TODO : Get residual Length
-        if(residual[i] > maximum) 
+        if(residual[i] > maximum)
             maximum = residual[i];
     }
     #ifdef __BTCMPCTR__EN_DBG__
@@ -242,9 +308,9 @@ void BitCompactor::btcmpctr_calc_bitln(unsigned char* residual,
     mDebugStr.str(""); mDebugStr << "In calc bitln, bitln is " << std::to_string(*bitln) << ", minFixedBitLn is " << std::to_string(*minFixedBitLn);
     BTC_REPORT_INFO(mVerbosityLevel,8,mDebugStr.str().c_str());
     #endif
-    if ( *bitln < *minFixedBitLn )
+    if ( *bitln < minFixedBitLn )
     {
-        *bitln = *minFixedBitLn;
+        *bitln = minFixedBitLn;
         #ifdef __BTCMPCTR__EN_DBG__
         mDebugStr.str(""); mDebugStr << "In calc bitln, bitln is " << std::to_string(*bitln) << ", limited by minFixedBitLn " << std::to_string(*minFixedBitLn);
         BTC_REPORT_INFO(mVerbosityLevel,8,mDebugStr.str().c_str());
@@ -252,14 +318,14 @@ void BitCompactor::btcmpctr_calc_bitln(unsigned char* residual,
     }
 }
 
-// A function that takes a buffer (residue) and calculates the dual length encoding. 
+// A function that takes a buffer (residue) and calculates the dual length encoding.
 // One of the lengths could be < 8 and is indicated in a 0 in the bitmap. A 1 in the
 // bitmap indicates 8bit symbols.
-void BitCompactor::btcmpctr_calc_dual_bitln( unsigned char* residual,
-                               unsigned char* bitln,
-                                        int   blkSize,
-                               unsigned char* bitmap,
-                                        int*  compressedSize
+void BitCompactor::btcmpctr_calc_dual_bitln( const unsigned char*   residual,
+                                             unsigned char*         bitln,
+                                             int                    blkSize,
+                                             unsigned char*         bitmap,
+                                             int*                   compressedSize
                              )
 {
     // First calculate/bin the bitlengths
@@ -278,7 +344,7 @@ void BitCompactor::btcmpctr_calc_dual_bitln( unsigned char* residual,
         // Increment the bin for that bitlength.
         bin[sBitln]++;
         // Store the bitlenght for the i th symbol.
-        symbolBitln[i] = sBitln;    
+        symbolBitln[i] = sBitln;
     }
     #ifdef __BTCMPCTR__EN_DBG__
     for(int i = 1; i < 9; i++) {
@@ -355,10 +421,10 @@ void BitCompactor::btcmpctr_calc_dual_bitln( unsigned char* residual,
 
 // Convert a signed number to unsigned by storing the sign bit in LSB
 //
-void BitCompactor::btcmpctr_tounsigned(signed char* inAry,
-                         unsigned char* residual,
-                         int            blkSize
-                        )
+void BitCompactor::btcmpctr_tounsigned(const signed char* inAry,
+                                        unsigned char*    residual,
+                                        int               blkSize
+                                       )
 {
     //if number is <0 then lose the MSB and shift a 1 to LSB.
     for(int i = 0; i < blkSize; i++) { // TODO : inAry size
@@ -394,7 +460,7 @@ void BitCompactor::btcmpctr_minprdct(
         algoArg->residual[i] = algoArg->inAry[i] - *algoArg->minimum;
     }
     // Find Bit Length
-    btcmpctr_calc_bitln(algoArg->residual,algoArg->bitln,algoArg->blkSize,algoArg->minFixedBitLn);    
+    btcmpctr_calc_bitln(algoArg->residual,algoArg->bitln,algoArg->blkSize,algoArg->minFixedBitLn);
 }
 
 // Do Min Signed Predict algo on a buffer, return minimum number and the bitln. These are pointers given to the function.
@@ -410,7 +476,7 @@ void BitCompactor::btcmpctr_minSprdct(
 
     *algoArg->minimum = 255;
     minS = 127;
-    
+
     for(int i = 0; i < algoArg->blkSize; i++) {// TODO : inAry size
         #ifdef __BTCMPCTR__EN_DBG__
         mDebugStr.str(""); mDebugStr << "In minprdct, inSAry[" << std::to_string(i) <<"] is "<< std::to_string(inSAry[i]);
@@ -441,7 +507,7 @@ void BitCompactor::btcmpctr_minSprdct(
     //Convert to Unsigned
     btcmpctr_tounsigned(residualS, algoArg->residual,algoArg->blkSize);
     // Find Bit Length
-    btcmpctr_calc_bitln(algoArg->residual,algoArg->bitln,algoArg->blkSize,algoArg->minFixedBitLn);    
+    btcmpctr_calc_bitln(algoArg->residual,algoArg->bitln,algoArg->blkSize,algoArg->minFixedBitLn);
 }
 // Do Mean Signed Predict algo on a buffer, return minimum number and the bitln. These are pointers given to the function.
 void BitCompactor::btcmpctr_muprdct(
@@ -455,7 +521,7 @@ void BitCompactor::btcmpctr_muprdct(
 
     *algoArg->minimum = 0;
     muS = 0;
-    sum = 0;    
+    sum = 0;
     for(int i = 0; i < algoArg->blkSize; i++) {
             sum += inSAry[i];
     }
@@ -470,7 +536,7 @@ void BitCompactor::btcmpctr_muprdct(
     //Convert to Unsigned
     btcmpctr_tounsigned(residualS, algoArg->residual,algoArg->blkSize);
     // Find Bit Length
-    btcmpctr_calc_bitln(algoArg->residual,algoArg->bitln,algoArg->blkSize,algoArg->minFixedBitLn);    
+    btcmpctr_calc_bitln(algoArg->residual,algoArg->bitln,algoArg->blkSize,algoArg->minFixedBitLn);
 }
 // Do Median Signed Predict algo on a buffer, return minimum number and the bitln. These are pointers given to the function.
 // http://ndevilla.free.fr/median/median/src/quickselect.c
@@ -484,7 +550,7 @@ void BitCompactor::btcmpctr_medprdct(
     signed char medianS;
     for(int i = 0; i < algoArg->blkSize; i++) {
         algoArg->residual[i] = algoArg->inAry[i];
-    }    
+    }
     // Sort the array, Even length => median = arr[blkSize/2 -1], Odd length => median = arr[blkSize/2]
     medianS = (signed char) getMedianNaive((unsigned char *)algoArg->residual,algoArg->blkSize);
 
@@ -496,7 +562,7 @@ void BitCompactor::btcmpctr_medprdct(
     //Convert to Unsigned
     btcmpctr_tounsigned(residualS, algoArg->residual,algoArg->blkSize);
     // Find Bit Length
-    btcmpctr_calc_bitln(algoArg->residual,algoArg->bitln,algoArg->blkSize,algoArg->minFixedBitLn);    
+    btcmpctr_calc_bitln(algoArg->residual,algoArg->bitln,algoArg->blkSize,algoArg->minFixedBitLn);
 }
 // No Predict, just look at the maximum in the array
 void BitCompactor::btcmpctr_noprdct(
@@ -516,7 +582,7 @@ void BitCompactor::btcmpctr_noSprdct(
 {
     // First convert to unsigned representation by storing MSB in LSB.
     btcmpctr_tounsigned((signed char*) algoArg->inAry, algoArg->residual,algoArg->blkSize);
-    btcmpctr_calc_bitln(algoArg->residual,algoArg->bitln,algoArg->blkSize,algoArg->minFixedBitLn);    
+    btcmpctr_calc_bitln(algoArg->residual,algoArg->bitln,algoArg->blkSize,algoArg->minFixedBitLn);
     #ifdef __BTCMPCTR__EN_DBG__
     mDebugStr.str(""); mDebugStr << "In NoSPrdct, bitln is " << std::to_string(*algoArg->bitln);
     BTC_REPORT_INFO(mVerbosityLevel,7,mDebugStr.str().c_str());
@@ -524,7 +590,7 @@ void BitCompactor::btcmpctr_noSprdct(
 }
 
 // BIN the bytes in the block and check if there are <= 16 unique symbols
-// If yes, return the bitln and residual. Residual is the bin number of the 
+// If yes, return the bitln and residual. Residual is the bin number of the
 // byte in the block.
 // Also need to return the array of bytes to be inserted after the header. Can be stored in *minimum.
 // Need a way to return the number of symbols valid. So that the correct number of bytes can be
@@ -577,11 +643,11 @@ void BitCompactor::btcmpctr_binCmpctprdct(
     } else {
         // Resudaul should already have the correct bin
         // index in them.
-        btcmpctr_calc_bitln(algoArg->residual,algoArg->bitln,algoArg->blkSize,algoArg->minFixedBitLn);    
+        btcmpctr_calc_bitln(algoArg->residual,algoArg->bitln,algoArg->blkSize,algoArg->minFixedBitLn);
     }
 }
 // Bitmap Proc
-// Bit map preproccing, find the top bin symbol and removes that symbol 
+// Bit map preproccing, find the top bin symbol and removes that symbol
 // while preserving a bitmap showing the location of the removed symbol.
 void BitCompactor::btcmpctr_btMapprdct(
                             btcmpctr_algo_args_t* algoArg
@@ -626,7 +692,7 @@ void BitCompactor::btcmpctr_btMapprdct(
     #endif
     *algoArg->minimum  = maxIdx;
     *algoArg->bitln    = 1;
-    *algoArg->numBytes = cnt; 
+    *algoArg->numBytes = cnt;
 
 }
 // Dummy Proc
@@ -636,7 +702,7 @@ void BitCompactor::btcmpctr_dummyprdct(
 {
     // Choose results which show worse performance.
     *(algoArg->bitln) = 8;
-    *algoArg->numBytes = algoArg->blkSize; 
+    *algoArg->numBytes = algoArg->blkSize;
     for(int i = 0; i < algoArg->blkSize; i++) {
         algoArg->residual[i] = algoArg->inAry[i];
     }
@@ -644,8 +710,8 @@ void BitCompactor::btcmpctr_dummyprdct(
 // Uncompression function
 // Given an inBuf, Current inBuf pointer, and a state, extract specified number of bytes in outByte.
 void BitCompactor::btcmpctr_xtrct_bits(
-                         unsigned char* inBuf,
-                                   int* inBufLen,
+                   const unsigned char* inBuf,
+                         unsigned  int* inBufLen,
                          unsigned char* state,
                          unsigned char* outByte,
                          unsigned char  numBits
@@ -668,8 +734,8 @@ void BitCompactor::btcmpctr_xtrct_bits(
 
 // Extract header and give out, cmp, algo, bitln, eof, 8 or 16 bit to add.
 unsigned char BitCompactor::btcmpctr_xtrct_hdr(
-                                 unsigned char* inAry,
-                                           int* inAryPtr,
+                           const unsigned char* inAry,
+                                 unsigned int*  inAryPtr,
                                  unsigned char  state,
                                  unsigned char* cmp,
                                  unsigned char* eofr,
@@ -678,7 +744,7 @@ unsigned char BitCompactor::btcmpctr_xtrct_hdr(
                                           int*  blkSize,
                                  unsigned char* bytes_to_add, // 1 or 2 bytes
                                  unsigned char* numSyms,
-                                          int*  numBytes,
+                                 unsigned int*  numBytes,
                                  unsigned char* bitmap,
                                           int   mixedBlkSize,
                                           int   dual_encode_en,
@@ -742,7 +808,7 @@ unsigned char BitCompactor::btcmpctr_xtrct_hdr(
     // Next extract Algo.
     btcmpctr_xtrct_bits(inAry,inAryPtr,&state,algo,3); // TODO Make Algo bits scalable.
     // Extract 3 bits of bitln
-    btcmpctr_xtrct_bits(inAry,inAryPtr,&state,bitln,3); 
+    btcmpctr_xtrct_bits(inAry,inAryPtr,&state,bitln,3);
     // If dual encode is enabled extract 2 bits to decode dual_encode.
     if(dual_encode_en) {
         btcmpctr_xtrct_bits(inAry,inAryPtr,&state,dual_encode,2);
@@ -758,18 +824,18 @@ unsigned char BitCompactor::btcmpctr_xtrct_hdr(
     }
     // Next extract 1 bytes of data_to_add
     if( (*algo == ADDPROC) || (*algo == SIGNSHFTADDPROC) ) {
-        btcmpctr_xtrct_bits(inAry,inAryPtr,&state,bytes_to_add,8); 
+        btcmpctr_xtrct_bits(inAry,inAryPtr,&state,bytes_to_add,8);
     }
     if( (*algo == BINEXPPROC) ) {
         // Number of symbols is not known during decompress.
         // Needs to be in the header. 5 additional bits after the header.
-        int numSymsLen = (*blkSize == BIGBLKSIZE) ? NUMSYMSBL4K : NUMSYMSBL; 
-        btcmpctr_xtrct_bits(inAry,inAryPtr,&state,numSyms,numSymsLen); 
+        int numSymsLen = (*blkSize == BIGBLKSIZE) ? NUMSYMSBL4K : NUMSYMSBL;
+        btcmpctr_xtrct_bits(inAry,inAryPtr,&state,numSyms,numSymsLen);
         if ( (*numSyms == 0) && (numSymsLen == 4) ) { *numSyms = 16;}
         if ( (*numSyms == 0) && (numSymsLen == 6) ) { *numSyms = 64;}
         for(int i = 0; i< *numSyms; i++) {
             *(bytes_to_add+i) = 0;
-            btcmpctr_xtrct_bits(inAry,inAryPtr,&state,(bytes_to_add+i),8); 
+            btcmpctr_xtrct_bits(inAry,inAryPtr,&state,(bytes_to_add+i),8);
         }
     }
     if ( (*algo == BTEXPPROC) ) {
@@ -810,8 +876,8 @@ unsigned char BitCompactor::btcmpctr_xtrct_hdr(
 
 // Extract bytes with a bitmap
 unsigned char BitCompactor::btcmpctr_xtrct_bytes_wbitmap(
-                                           unsigned char* inAry,
-                                                     int* inAryPtr,
+                                     const unsigned char* inAry,
+                                           unsigned  int* inAryPtr,
                                            unsigned char  state,
                                            unsigned char  bitln,
                                            unsigned char* outBuf, // Assume OutBuf is BLKSIZE
@@ -847,8 +913,8 @@ unsigned char BitCompactor::btcmpctr_xtrct_bytes_wbitmap(
 
 // Expand bits to byte, given an input buffer pointing to the exact bit, and the number of bits per symbol. produce an output byte array.
 unsigned char BitCompactor::btcmpctr_xtrct_bytes(
-                                    unsigned char* inAry,
-                                              int* inAryPtr,
+                              const unsigned char* inAry,
+                                    unsigned  int* inAryPtr,
                                     unsigned char  state,
                                     unsigned char  bitln,
                                     unsigned char* outBuf, // Assume OutBuf is BLKSIZE
@@ -861,7 +927,7 @@ unsigned char BitCompactor::btcmpctr_xtrct_bytes(
     unsigned char lbitln = bitln;
     while (cnt < blkSize) {
         if(mode16) {
-            //construct 16bits output data 
+            //construct 16bits output data
             if (bitln == 0) { lbitln = 16; }
             if(lbitln > 8) {
                 btcmpctr_xtrct_bits(inAry,inAryPtr,&state,(outBuf+(cnt++)),8);
@@ -879,12 +945,12 @@ unsigned char BitCompactor::btcmpctr_xtrct_bytes(
         #endif
     }
     return state;
-        
+
 }
-                                    
+
 // tosigned - oppposite of tounsigned.
-void BitCompactor::btcmpctr_tosigned(unsigned char* inAry,
-                       unsigned char* outBuf
+void BitCompactor::btcmpctr_tosigned(const unsigned char* inAry,
+                                           unsigned char* outBuf
                       )
 {
     // if LSB == 1, then it was a signed number.
@@ -906,7 +972,7 @@ void BitCompactor::btcmpctr_tosigned(unsigned char* inAry,
 }
 // 16 and 8 bit adder into array.
 void BitCompactor::btcmpctr_addByte(
-                      unsigned char* data_to_add,
+             const unsigned char* data_to_add,
                       unsigned char  mode16,
                       unsigned char* outBuf
                      )
@@ -921,7 +987,7 @@ void BitCompactor::btcmpctr_addByte(
     }
 }
 
-void BitCompactor::btcmpctr_initAlgosAry(btcmpctr_compress_wrap_args_t* args)
+void BitCompactor::btcmpctr_initAlgosAry(const btcmpctr_compress_wrap_args_t& args)
 {
     AlgoAry[MINPRDCT_IDX]       = &BitCompactor::btcmpctr_minprdct;
     AlgoAry[MINSPRDCT_IDX]      = &BitCompactor::btcmpctr_minSprdct;
@@ -929,38 +995,38 @@ void BitCompactor::btcmpctr_initAlgosAry(btcmpctr_compress_wrap_args_t* args)
     AlgoAry[MEDPRDCT_IDX]       = &BitCompactor::btcmpctr_medprdct;
     AlgoAry[NOPRDCT_IDX]        = &BitCompactor::btcmpctr_noprdct;
     AlgoAry[NOSPRDCT_IDX]       = &BitCompactor::btcmpctr_noSprdct;
-    if(args->proc_bin_en) {
+    if(args.proc_bin_en) {
         AlgoAry[BINCMPCT_IDX]       = &BitCompactor::btcmpctr_binCmpctprdct;
     } else {
         AlgoAry[BINCMPCT_IDX]       = &BitCompactor::btcmpctr_dummyprdct;
     }
-    if(args->proc_btmap_en) {
+    if(args.proc_btmap_en) {
         AlgoAry[BTMAP_IDX]       = &BitCompactor::btcmpctr_btMapprdct;
     } else {
         AlgoAry[BTMAP_IDX]       = &BitCompactor::btcmpctr_dummyprdct;
     }
     //4K Algo
-    if(args->proc_btmap_en) {
+    if(args.proc_btmap_en) {
         AlgoAry4K[BTMAP4K_IDX]       = &BitCompactor::btcmpctr_btMapprdct;
     } else {
         AlgoAry4K[BTMAP4K_IDX]       = &BitCompactor::btcmpctr_dummyprdct;
     }
-    if(args->proc_bin_en) {
+    if(args.proc_bin_en) {
         AlgoAry4K[BINCMPCT4K_IDX]       = &BitCompactor::btcmpctr_binCmpctprdct;
     } else {
         AlgoAry4K[BINCMPCT4K_IDX]       = &BitCompactor::btcmpctr_dummyprdct;
     }
     //Initialize the Header overhead.
-    AlgoAryHeaderOverhead[MINPRDCT_IDX]       = 16 + (2*args->mixedBlkSize) + (2*args->dual_encode_en); // 8bit header + 8 bit byte_to_add (minimum)
-    AlgoAryHeaderOverhead[MINSPRDCT_IDX]      = 16 + (2*args->mixedBlkSize) + (2*args->dual_encode_en); // 8bit header + 8 bit byte_to_add (minimum)
-    AlgoAryHeaderOverhead[MUPRDCT_IDX]        = 16 + (2*args->mixedBlkSize) + (2*args->dual_encode_en); // 8bit header + 8 bit byte_to_add (mu)
-    AlgoAryHeaderOverhead[MEDPRDCT_IDX]       = 16 + (2*args->mixedBlkSize) + (2*args->dual_encode_en); // 8bit header + 8 bit byte_to_add (mu)
-    AlgoAryHeaderOverhead[NOPRDCT_IDX]        = 8 + (2*args->mixedBlkSize) + (2*args->dual_encode_en);  // 8 bit header
-    AlgoAryHeaderOverhead[NOSPRDCT_IDX]       = 8 + (2*args->mixedBlkSize) + (2*args->dual_encode_en);  // 8 bit header
-    AlgoAryHeaderOverhead[BINCMPCT_IDX]       = 12 + (2*args->mixedBlkSize) + (2*args->dual_encode_en);  // 12 bit header. There is additional overhead based on the number of symbols which is dynamic
-    AlgoAryHeaderOverhead[BTMAP_IDX]          = 8+8+8+64 + (2*args->mixedBlkSize) + (2*args->dual_encode_en);  // 8 Header, 8 topBinByte,8 ByteLength,64 Bitmap
-    AlgoAryHeaderOverhead4K[BINCMPCT4K_IDX]   = 14 + (2*args->mixedBlkSize);  // 12 bit header. There is additional overhead based on the number of symbols which is dynamic
-    AlgoAryHeaderOverhead4K[BTMAP4K_IDX]      = 8+8+14+4096 + (2*args->mixedBlkSize);  // 8 Header, 8 topBinByte,14 ByteLength,4096 Bitmap
+    AlgoAryHeaderOverhead[MINPRDCT_IDX]       = 16 + (2*args.mixedBlkSize) + (2*args.dual_encode_en); // 8bit header + 8 bit byte_to_add (minimum)
+    AlgoAryHeaderOverhead[MINSPRDCT_IDX]      = 16 + (2*args.mixedBlkSize) + (2*args.dual_encode_en); // 8bit header + 8 bit byte_to_add (minimum)
+    AlgoAryHeaderOverhead[MUPRDCT_IDX]        = 16 + (2*args.mixedBlkSize) + (2*args.dual_encode_en); // 8bit header + 8 bit byte_to_add (mu)
+    AlgoAryHeaderOverhead[MEDPRDCT_IDX]       = 16 + (2*args.mixedBlkSize) + (2*args.dual_encode_en); // 8bit header + 8 bit byte_to_add (mu)
+    AlgoAryHeaderOverhead[NOPRDCT_IDX]        = 8 + (2*args.mixedBlkSize) + (2*args.dual_encode_en);  // 8 bit header
+    AlgoAryHeaderOverhead[NOSPRDCT_IDX]       = 8 + (2*args.mixedBlkSize) + (2*args.dual_encode_en);  // 8 bit header
+    AlgoAryHeaderOverhead[BINCMPCT_IDX]       = 12 + (2*args.mixedBlkSize) + (2*args.dual_encode_en);  // 12 bit header. There is additional overhead based on the number of symbols which is dynamic
+    AlgoAryHeaderOverhead[BTMAP_IDX]          = 8+8+8+64 + (2*args.mixedBlkSize) + (2*args.dual_encode_en);  // 8 Header, 8 topBinByte,8 ByteLength,64 Bitmap
+    AlgoAryHeaderOverhead4K[BINCMPCT4K_IDX]   = 14 + (2*args.mixedBlkSize);  // 12 bit header. There is additional overhead based on the number of symbols which is dynamic
+    AlgoAryHeaderOverhead4K[BTMAP4K_IDX]      = 8+8+14+4096 + (2*args.mixedBlkSize);  // 8 Header, 8 topBinByte,14 ByteLength,4096 Bitmap
 
 }
 
@@ -980,7 +1046,7 @@ unsigned char BitCompactor::btcmpctr_getAlgofrmIdx(int idx)
        return BTEXPPROC;
     } else {
        return BITC_ALG_NONE;
-    }  
+    }
 }
 
 unsigned char BitCompactor::btcmpctr_get4KAlgofrmIdx(int idx)
@@ -991,7 +1057,7 @@ unsigned char BitCompactor::btcmpctr_get4KAlgofrmIdx(int idx)
        return BTEXPPROC;
     } else {
        return BITC_ALG_NONE;
-    }  
+    }
 }
 
 BitCompactor::btcmpctr_algo_choice_t BitCompactor::btcmpctr_ChooseAlgo64B(btcmpctr_algo_args_t* algoArg,
@@ -1006,14 +1072,14 @@ BitCompactor::btcmpctr_algo_choice_t BitCompactor::btcmpctr_ChooseAlgo64B(btcmpc
     int cmprsdSize, cmprsdSizeDual(0), dualCpSize;
     unsigned char dualBitln;
     unsigned char bitmap[BLKSIZE];
-   
+
     minSize        = (workingBlkSize*8) + (mixedBlkSize ? 4 : 2);
     minSizeDual    = (workingBlkSize*8) + (mixedBlkSize ? 4 : 2);
     chosenAlgo     = BITC_ALG_NONE;
     chosenAlgoDual = BITC_ALG_NONE;
     *(algoArg->bitln)       = 8;
     // Run Through the 64B Algo's, except BINCMPCT_IDX and BTMAP_IDX (disabled)
-    for(int i = 0; i< (NUMALGO - 2); i++) {
+    for(int i = 0; i< (BTC27_NUMALGO - 2); i++) {
         #ifdef __BTCMPCTR__EN_DBG__
         mDebugStr.str(""); mDebugStr << "Calling Algo "<< std::to_string(i);
         BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
@@ -1070,7 +1136,7 @@ BitCompactor::btcmpctr_algo_choice_t BitCompactor::btcmpctr_ChooseAlgo64B(btcmpc
     mDebugStr.str(""); mDebugStr << "Dual Encode Mode is  "<< std::to_string(algoChoice.dual_encode) <<",";
     BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
     #endif
-    algoChoice.none       = algoChoice.dual_encode ? (chosenAlgoDual == BITC_ALG_NONE) : (chosenAlgo == BITC_ALG_NONE); 
+    algoChoice.none       = algoChoice.dual_encode ? (chosenAlgoDual == BITC_ALG_NONE) : (chosenAlgo == BITC_ALG_NONE);
     algoChoice.algoHeader = btcmpctr_getAlgofrmIdx(algoChoice.dual_encode ? chosenAlgoDual : chosenAlgo);
     algoChoice.chosenAlgo = algoChoice.none ? &BitCompactor::btcmpctr_dummyprdct : (AlgoAry[algoChoice.dual_encode ? chosenAlgoDual : chosenAlgo]);
     algoChoice.cmprsdSize = algoChoice.dual_encode ? minSizeDual : minSize;
@@ -1094,7 +1160,7 @@ BitCompactor::btcmpctr_algo_choice_t BitCompactor::btcmpctr_ChooseAlgo4K(btcmpct
     chosenAlgo  = BITC_ALG_NONE;
     *(algoArg->bitln)       = 8;
     // Run Through the 64B Algo's
-    for(int i = 0; i< NUM4KALGO; i++) {
+    for(int i = 0; i< BTC27_NUM4KALGO; i++) {
         #ifdef __BTCMPCTR__EN_DBG__
         mDebugStr.str(""); mDebugStr << "Calling Algo "<< std::to_string(i);
         BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
@@ -1142,518 +1208,512 @@ BitCompactor::btcmpctr_algo_choice_t BitCompactor::btcmpctr_ChooseAlgo4K(btcmpct
 //Compress Wrap
 //This is a SWIG/numpy integration friendly interface for the compression function.
 //
-int BitCompactor::CompressArray(unsigned char* src,
-                                    int   srcLen,
-                           unsigned char* dst,
-                           int   dstLen, // unused
-                           btcmpctr_compress_wrap_args_t* args
-                          )
+unsigned int BitCompactor::CompressArray(const unsigned char* const              src,
+                                         unsigned int                            srcLen,
+                                         unsigned char*                          dst,
+                                         unsigned int                            dstLen,
+                                         const btcmpctr_compress_wrap_args_t&    args
+                                        )
 {
-        int resultLen;
-        int status;
+    unsigned int resultLen = dstLen;
+    int status;
 
-        UNUSED(dstLen);
-
-        status = CompressWrap(src,&srcLen,dst,&resultLen,args);
-        if(status) {
-            return resultLen;
-        } else {
-            return 0;
-        }
+    status = CompressWrap(src, srcLen, dst, resultLen, args);
+    if(status) {
+        return resultLen;
+    } else {
+        return 0;
+    }
 }
 
-void BitCompactor::reset()
-{
-    // does nothing
-}
-
-int BitCompactor::CompressWrap(unsigned char* src,
-                           int*           srcLen,
-                           unsigned char* dst,
-                           int*           dstLen,// dstLen holds the size of the output buffer.
-                           btcmpctr_compress_wrap_args_t* args
+int BitCompactor::CompressWrap(const unsigned char*                 src,
+                               unsigned int                         srcLen,
+                               unsigned char*                       dst,
+                               unsigned int&                        dstLen, // dstLen holds the size of the output buffer.
+                               const btcmpctr_compress_wrap_args_t& args
                            )
 {
-    mVerbosityLevel = args->verbosity;
-    btcmpctr_initAlgosAry(args);    
-    // Keep a copy of the destination buffer size allocated
-    // to be used in checks. The final destination size will
-    // be returned in this pointer. 
-    //
-    unsigned char bitln;
-    unsigned char minimum[MAXSYMS4K];
-    int cmprsdSize, workingBlkSize,dualCpSize;
-    int srcCnt = 0;
-    int chosenAlgo;
-    int state = 0;
-    int blkCnt = 0;
-    int numSyms = 0;
-    unsigned char residual[BIGBLKSIZE];
-    unsigned char bitmap[BIGBLKSIZE];
-    int numBytes;
-    unsigned int accum = 0;
-    btcmpctr_algo_args_t algoArg;
-    btcmpctr_algo_choice_t chosenAlgos[BIGBLKSIZE/BLKSIZE];
-    btcmpctr_algo_choice_t chosenAlgos4K = {};
-    int smCntr = 0;
-    int numSmBlks = 0;
-    int bigBlkSize;
-     
+    mVerbosityLevel = args.verbosity;
+    if(src && dst)
+    {
+        // Check if output buffer is big enough for compressed data worst case
+        unsigned int boundSize = this->GetCompressedSizeBound(srcLen);
+        if(boundSize <= dstLen)
+        {
+            btcmpctr_initAlgosAry(args);
+            // Keep a copy of the destination buffer size allocated
+            // to be used in checks. The final destination size will
+            // be returned in this pointer.
 
-    *dstLen = 0;
-    //dst[*dstLen] = 0;
-    // Choose the correct Algo to run.
-    #ifdef __BTCMPCTR__EN_DBG__
-    mDebugStr.str(""); mDebugStr << "Source Length = "<< std::to_string(*srcLen);
-    BTC_REPORT_INFO(mVerbosityLevel,1,mDebugStr.str().c_str());
-    #endif
-    algoArg.minimum  = (unsigned char *)&minimum;
-    algoArg.bitln    = &bitln;
-    algoArg.numSyms  = &numSyms;
-    algoArg.bitmap   = (unsigned char *)&bitmap;
-    algoArg.numBytes = &numBytes;
-    algoArg.residual = (unsigned char *)&residual;
-    algoArg.minFixedBitLn = &(args->minFixedBitLn); 
+            unsigned char bitln;
+            unsigned char minimum[MAXSYMS4K];
+            int cmprsdSize, workingBlkSize,dualCpSize;
+            unsigned int srcCnt = 0, dstCnt = 0;
+            int chosenAlgo;
+            int state = 0;
+            int blkCnt = 0;
+            int numSyms = 0;
+            unsigned char residual[BIGBLKSIZE];
+            unsigned char bitmap[BIGBLKSIZE];
+            int numBytes;
+            unsigned int accum = 0;
+            btcmpctr_algo_args_t algoArg;
+            btcmpctr_algo_choice_t chosenAlgos[BIGBLKSIZE/BLKSIZE];
+            btcmpctr_algo_choice_t chosenAlgos4K = {};
+            int smCntr = 0;
+            int numSmBlks = 0;
+            int bigBlkSize;
 
-    while (srcCnt < *srcLen) {   
-    /* While(srcCnt < srcLen)
-     *
-     *  If (srcCnt + 4K < srcLen):
-     *      // Can run 4K Algo
-     *      (Chosen4KAlgo,CmprsdSize4K) = Run_Choose4kAlgo();
-     *      (<Chosen64BAlgoAry>,TotCmprsdSize64B) = Run_Choose64BAlgo();
-     *      If (CmprsdSize4K <= TotCmprsdSize64B):
-     *          Chosen = 4K
-     *      Else
-     *          Chosen = 64B
-     *  Else:
-     *      // Last <4K block will always get chopped up by 64B blocks
-     *      (<Chosen64BAlgoAry>,TotCmprsdSize) = Run_Choose64BAlgo();
-     *      Chosen = 64B
-     *  
-     *  If (Chosen = 4K):
-     *      Run Chosen4KAlgo();
-     *      Insert Header();
-     *      Insert Data();
-     *  Else:
-     *      Foreach Algo in <Chosen64BAlgoAry>:
-     *          Run Algo(); // To get residue
-     *          Insert Header();
-     *          Insert Data();
-     *       
-     *      End
-     */
-        if( (srcCnt + BIGBLKSIZE) > *srcLen) {
-            bigBlkSize = (*srcLen - srcCnt);
-        } else {
-            bigBlkSize = BIGBLKSIZE;
-        }
-        // Choose 4K Algorithm
-        if((bigBlkSize == BIGBLKSIZE) && args->mixedBlkSize) {
-           algoArg.inAry = (src + srcCnt);
-           algoArg.blkSize = bigBlkSize;
-           chosenAlgos4K = btcmpctr_ChooseAlgo4K(&algoArg,args->mixedBlkSize);
-        }
-
-        // Work on the 64B block size.
-        cmprsdSize = 0;
-        smCntr = 0;
-        numSmBlks = 0;
-        while(smCntr < bigBlkSize) {
-
-            if( (smCntr + BLKSIZE) > bigBlkSize) {
-                workingBlkSize = (bigBlkSize - smCntr);
-            } else {
-                workingBlkSize = BLKSIZE;
-            }
-            algoArg.inAry = (src + srcCnt + smCntr);
-            algoArg.blkSize = workingBlkSize;
-            // Call the Algo Choice.
+            // Choose the correct Algo to run.
             #ifdef __BTCMPCTR__EN_DBG__
-            mDebugStr.str(""); mDebugStr << "Trying to find best algo for this blockCnt = "<< std::to_string(blkCnt);
-            BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
+            mDebugStr.str(""); mDebugStr << "Source Length = "<< std::to_string(srcLen);
+            BTC_REPORT_INFO(mVerbosityLevel,1,mDebugStr.str().c_str());
             #endif
-            chosenAlgos[numSmBlks].workingBlkSize = workingBlkSize;
-            if (workingBlkSize == BLKSIZE) {
-                chosenAlgos[numSmBlks] = btcmpctr_ChooseAlgo64B(&algoArg,args->mixedBlkSize,args->dual_encode_en);
-                #ifdef __BTCMPCTR__EN_DBG__
-                mDebugStr.str(""); mDebugStr << " blkCnt = "<< std::to_string(blkCnt);
-                BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
-                #endif
-            }
-            cmprsdSize += chosenAlgos[numSmBlks].cmprsdSize;
-            numSmBlks++;
-            smCntr += workingBlkSize;
-            #ifdef __BTCMPCTR__EN_DBG__
-            mDebugStr.str(""); mDebugStr << "bigBlkSize = "<< std::to_string(bigBlkSize)<< ", smCntr = "<< std::to_string(smCntr) << ", numSmBlks = "<< std::to_string(numSmBlks);
-            BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
-            #endif
-        }
-        // IF    Compressed size of 4K block < totoal comporessed size of 64B blocks, and if this is not the last <4K block. and if mixed Block size is enabled.
-        if( (((chosenAlgos4K.cmprsdSize <= cmprsdSize) && (bigBlkSize == BIGBLKSIZE)) || args->bypass_en) && args->mixedBlkSize) {
-            //---------------------------------------------------------------------------------
-            // Chosen 4K Blocks 
-            //---------------------------------------------------------------------------------
-            #ifdef __BTCMPCTR__EN_DBG__
-            mDebugStr.str(""); mDebugStr << "Running chosen algo";
-            BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
-            #endif
-            if ( (chosenAlgos4K.workingBlkSize < BIGBLKSIZE) || args->bypass_en) {
-                // Force an Algo for the last block.
-                chosenAlgos4K.none = 1;
-            }
-            if(chosenAlgos4K.none != 1) {
-                algoArg.inAry = (src + srcCnt);
-                algoArg.blkSize = chosenAlgos4K.workingBlkSize;
-                (this->*chosenAlgos4K.chosenAlgo)(&algoArg);
-                chosenAlgo = chosenAlgos4K.algoHeader;
-             } else {
-                bitln = 8;
-                for(int i = 0; i < chosenAlgos4K.workingBlkSize; i++) {
-                    residual[i] = *(src + srcCnt + i);
+            algoArg.minimum  = (unsigned char *)&minimum;
+            algoArg.bitln    = &bitln;
+            algoArg.numSyms  = &numSyms;
+            algoArg.bitmap   = (unsigned char *)&bitmap;
+            algoArg.numBytes = &numBytes;
+            algoArg.residual = (unsigned char *)&residual;
+            algoArg.minFixedBitLn = args.minFixedBitLn;
+
+            while (srcCnt < srcLen) {
+                if( (srcCnt + BIGBLKSIZE) > srcLen) {
+                    bigBlkSize = (srcLen - srcCnt);
+                } else {
+                    bigBlkSize = BIGBLKSIZE;
                 }
-                chosenAlgo = BITC_ALG_NONE;
-            }
-            // Insert Header
-            #ifdef __BTCMPCTR__EN_DBG__
-            mDebugStr.str(""); mDebugStr << "Inserting Header, chosen Algo in 4K is "<< std::to_string(chosenAlgo);
-            BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
-            #endif
-            state = btcmpctr_insrt_hdr(chosenAlgo, bitln, dstLen, dst, state, &accum,0,chosenAlgos4K.workingBlkSize,args->mixedBlkSize,0);
-            // Insert Post Header bytes
-            // Insert the symbols in case of BINEXPPROC.
-            if ( (chosenAlgo == BINEXPPROC) ) {
-               // Insert 6 bits of numSyms
-               int numSymsToInsrt = (numSyms == 64) && (NUMSYMSBL4K == 6) ? 0 : numSyms;
-               state = btcmpctr_insrt_byte(numSymsToInsrt,NUMSYMSBL4K,dstLen,dst,state,&accum,0);
-               // Insert the number of symbols.
-               for(int i = 0; i < numSyms; i++) {
-                   #ifdef __BTCMPCTR__EN_DBG__
-                   mDebugStr.str(""); mDebugStr << "Inserting Binned Header "<< std::to_string(i) << ", "<< std::to_string(minimum[i]);
-                   BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
-                   #endif
-                   state = btcmpctr_insrt_byte(minimum[i],8,dstLen,dst,state,&accum,0);
-               }
-            }
-            if ( (chosenAlgo == BTEXPPROC) ) {
-                // Insert 8bits of max freq symbol.
-                state = btcmpctr_insrt_byte(minimum[0],8,dstLen,dst,state,&accum,0);
-                // insert 14bits of byte length (14 to keep an even number of header bits)
-                state = btcmpctr_insrt_byte(numBytes,8,dstLen,dst,state,&accum,0);
-                state = btcmpctr_insrt_byte((numBytes>>8),6,dstLen,dst,state,&accum,0);
-                // Insert 4096 bits of bitmap
-                for(int i = 0; i < chosenAlgos4K.workingBlkSize; i++) {
-                   state = btcmpctr_insrt_byte(bitmap[i],1,dstLen,dst,state,&accum,0);
+                // Choose 4K Algorithm
+                if((bigBlkSize == BIGBLKSIZE) && args.mixedBlkSize) {
+                   algoArg.inAry = (src + srcCnt);
+                   algoArg.blkSize = bigBlkSize;
+                   chosenAlgos4K = btcmpctr_ChooseAlgo4K(&algoArg,args.mixedBlkSize);
                 }
-            }
-                    
-            // Insert data.
-            #ifdef __BTCMPCTR__EN_DBG__
-            mDebugStr.str(""); mDebugStr << "Inserting Data";
-            BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
-            #endif
-            int dataSize = (chosenAlgo == BTEXPPROC) ? numBytes : chosenAlgos4K.workingBlkSize;
-            for(int i = 0; i< dataSize; i++) {
-                #ifdef __BTCMPCTR__EN_DBG__
-                mDebugStr.str(""); mDebugStr << "Inserting Data cnt ="<< std::to_string(i)<<" Data = "<< std::to_string(residual[i])<< ", Src Data = "<< std::hex << std::to_string(*(src + srcCnt + i));
-                BTC_REPORT_INFO(mVerbosityLevel,6,mDebugStr.str().c_str());
-                #endif
-                state = btcmpctr_insrt_byte(residual[i],bitln,dstLen,dst,state,&accum,0);
-            }
-        
-        } else {
-            //---------------------------------------------------------------------------------
-            // Chosen 64B Blocks 
-            //---------------------------------------------------------------------------------
-            // ChosenAlgo must be re-run with to correctly generate the compressed 
-            smCntr = 0;
-            for(int smBlk = 0; smBlk < numSmBlks ; smBlk++) { 
-                #ifdef __BTCMPCTR__EN_DBG__
-                mDebugStr.str(""); mDebugStr << "Running chosen algo for small block count = "<< std::to_string(smBlk) <<"with blockSize = "<< std::to_string(chosenAlgos[smBlk].workingBlkSize);
-                BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
-                #endif
-                if ( (chosenAlgos[smBlk].workingBlkSize < BLKSIZE) || args->bypass_en) {
-                    // Force an Algo for the last block.
-                    chosenAlgos[smBlk].none = 1;
-                    chosenAlgos[smBlk].dual_encode = 0;
-                }
-                if(chosenAlgos[smBlk].none != 1) {
+
+                // Work on the 64B block size.
+                cmprsdSize = 0;
+                smCntr = 0;
+                numSmBlks = 0;
+                while(smCntr < bigBlkSize) {
+
+                    if( (smCntr + BLKSIZE) > bigBlkSize) {
+                        workingBlkSize = (bigBlkSize - smCntr);
+                    } else {
+                        workingBlkSize = BLKSIZE;
+                    }
                     algoArg.inAry = (src + srcCnt + smCntr);
-                    algoArg.blkSize = chosenAlgos[smBlk].workingBlkSize;
-                    (this->*chosenAlgos[smBlk].chosenAlgo)(&algoArg);
-                    chosenAlgo = chosenAlgos[smBlk].algoHeader;
-                    if(chosenAlgos[smBlk].dual_encode) {
-                        // Re-run dualEncode calculate length
-                        btcmpctr_calc_dual_bitln((unsigned char*)&residual,&bitln,chosenAlgos[smBlk].workingBlkSize,(unsigned char*)bitmap,&dualCpSize);
-                    }
-                 } else {
-                    bitln = 8;
-                    for(int i = 0; i < chosenAlgos[smBlk].workingBlkSize; i++) {
-                        residual[i] = *(src + srcCnt + smCntr + i);
-                    }
-                    chosenAlgo = BITC_ALG_NONE;
-                }
-                // Insert Header
-                #ifdef __BTCMPCTR__EN_DBG__
-                mDebugStr.str(""); mDebugStr << "Inserting Header";
-                BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
-                #endif
-                state = btcmpctr_insrt_hdr(chosenAlgo, bitln, dstLen, dst, state, &accum,0,chosenAlgos[smBlk].workingBlkSize,args->mixedBlkSize,0);
-                // Insert Post Header bytes
-                if(chosenAlgo != BITC_ALG_NONE) {
+                    algoArg.blkSize = workingBlkSize;
+                    // Call the Algo Choice.
                     #ifdef __BTCMPCTR__EN_DBG__
-                    mDebugStr.str(""); mDebugStr << "Inserting Header";
+                    mDebugStr.str(""); mDebugStr << "Trying to find best algo for this blockCnt = "<< std::to_string(blkCnt);
                     BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
                     #endif
-                    if(chosenAlgos[smBlk].dual_encode) {
-                        state = btcmpctr_insrt_byte(1,2,dstLen,dst,state,&accum,0);
-                        #ifdef DL_INC_BL
-                        // Insert the bit length
-                        //calculae the bitlength
-                        uint16_t cpBitLen = 0;
-                        for(int i = 0; i < chosenAlgos[smBlk].workingBlkSize; i++) {
-                            cpBitLen = bitmap[i] ? cpBitLen+8 : cpBitLen+bitln;
-                        }
-                        // Insert 10 bits.
-                        state = btcmpctr_insrt_byte(cpBitLen,8,dstLen,dst,state,&accum,0);
-                        cpBitLen >>= 8;
-                        state = btcmpctr_insrt_byte(cpBitLen,2,dstLen,dst,state,&accum,0);
+                    chosenAlgos[numSmBlks].workingBlkSize = workingBlkSize;
+                    if (workingBlkSize == BLKSIZE) {
+                        chosenAlgos[numSmBlks] = btcmpctr_ChooseAlgo64B(&algoArg,args.mixedBlkSize,args.dual_encode_en);
+                        #ifdef __BTCMPCTR__EN_DBG__
+                        mDebugStr.str(""); mDebugStr << " blkCnt = "<< std::to_string(blkCnt);
+                        BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
                         #endif
-                    } else {
-                        state = btcmpctr_insrt_byte(0,2,dstLen,dst,state,&accum,0);
                     }
-                }
-                if( (chosenAlgo == ADDPROC) || (chosenAlgo == SIGNSHFTADDPROC) ) {
-                    // Insert one more byte.
+                    cmprsdSize += chosenAlgos[numSmBlks].cmprsdSize;
+                    numSmBlks++;
+                    smCntr += workingBlkSize;
                     #ifdef __BTCMPCTR__EN_DBG__
-                    mDebugStr.str(""); mDebugStr << "Inserting Header plus 1 more byte";
+                    mDebugStr.str(""); mDebugStr << "bigBlkSize = "<< std::to_string(bigBlkSize)<< ", smCntr = "<< std::to_string(smCntr) << ", numSmBlks = "<< std::to_string(numSmBlks);
                     BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
                     #endif
-                    state = btcmpctr_insrt_byte(minimum[0],8,dstLen,dst,state,&accum,0);
                 }
-                // Insert the symbols in case of BINEXPPROC.
-                if ( (chosenAlgo == BINEXPPROC) ) {
-                   // Insert 5 bits of numSyms
-                   int numSymsToInsrt = (numSyms == 16) && (NUMSYMSBL == 4) ? 0 : numSyms;
-                   state = btcmpctr_insrt_byte(numSymsToInsrt,NUMSYMSBL,dstLen,dst,state,&accum,0);
-                   // Insert the number of symbols.
-                   for(int i = 0; i < numSyms; i++) {
-                       #ifdef __BTCMPCTR__EN_DBG__
-                       mDebugStr.str(""); mDebugStr << "Inserting Binned Header "<< std::to_string(i)<<", "<< std::to_string(minimum[i]);
-                       BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
-                       #endif
-                       state = btcmpctr_insrt_byte(minimum[i],8,dstLen,dst,state,&accum,0);
-                   }
-                }
-                if ( (chosenAlgo == BTEXPPROC) ) {
-                    // Insert 8bits of max freq symbol.
-                    state = btcmpctr_insrt_byte(minimum[0],8,dstLen,dst,state,&accum,0);
-                    // insert 8bits of byte length (8 to keep an even number of header bits)
-                    state = btcmpctr_insrt_byte(numBytes,8,dstLen,dst,state,&accum,0);
-                    // Insert 64 bits of bitmap
-                    for(int i = 0; i < chosenAlgos[smBlk].workingBlkSize; i++) {
-                       state = btcmpctr_insrt_byte(bitmap[i],1,dstLen,dst,state,&accum,0);
+                // IF    Compressed size of 4K block < totoal comporessed size of 64B blocks, and if this is not the last <4K block. and if mixed Block size is enabled.
+                if( (((chosenAlgos4K.cmprsdSize <= cmprsdSize) && (bigBlkSize == BIGBLKSIZE)) || args.bypass_en) && args.mixedBlkSize) {
+                    //---------------------------------------------------------------------------------
+                    // Chosen 4K Blocks
+                    //---------------------------------------------------------------------------------
+                    #ifdef __BTCMPCTR__EN_DBG__
+                    mDebugStr.str(""); mDebugStr << "Running chosen algo";
+                    BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
+                    #endif
+                    if ( (chosenAlgos4K.workingBlkSize < BIGBLKSIZE) || args.bypass_en) {
+                        // Force an Algo for the last block.
+                        chosenAlgos4K.none = 1;
                     }
-                }
-                // Insert the Bitmap for dual encode
-                if(args->dual_encode_en) {
-                    if(chosenAlgos[smBlk].dual_encode) {
-                        for(int i = 0; i < chosenAlgos[smBlk].workingBlkSize; i++) {
-                           state = btcmpctr_insrt_byte(bitmap[i],1,dstLen,dst,state,&accum,0);
+                    if(chosenAlgos4K.none != 1) {
+                        algoArg.inAry = (src + srcCnt);
+                        algoArg.blkSize = chosenAlgos4K.workingBlkSize;
+                        (this->*chosenAlgos4K.chosenAlgo)(&algoArg);
+                        chosenAlgo = chosenAlgos4K.algoHeader;
+                     } else {
+                        bitln = 8;
+                        for(int i = 0; i < chosenAlgos4K.workingBlkSize; i++) {
+                            residual[i] = *(src + srcCnt + i);
+                        }
+                        chosenAlgo = BITC_ALG_NONE;
+                    }
+                    // Insert Header
+                    #ifdef __BTCMPCTR__EN_DBG__
+                    mDebugStr.str(""); mDebugStr << "Inserting Header, chosen Algo in 4K is "<< std::to_string(chosenAlgo);
+                    BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
+                    #endif
+                    state = btcmpctr_insrt_hdr(chosenAlgo, bitln, &dstCnt, dst, state, &accum,0,chosenAlgos4K.workingBlkSize,args.mixedBlkSize,0);
+                    // Insert Post Header bytes
+                    // Insert the symbols in case of BINEXPPROC.
+                    if ( (chosenAlgo == BINEXPPROC) ) {
+                       // Insert 6 bits of numSyms
+                       int numSymsToInsrt = (numSyms == 64) && (NUMSYMSBL4K == 6) ? 0 : numSyms;
+                       state = btcmpctr_insrt_byte(numSymsToInsrt,NUMSYMSBL4K,&dstCnt,dst,state,&accum,0);
+                       // Insert the number of symbols.
+                       for(int i = 0; i < numSyms; i++) {
+                           #ifdef __BTCMPCTR__EN_DBG__
+                           mDebugStr.str(""); mDebugStr << "Inserting Binned Header "<< std::to_string(i) << ", "<< std::to_string(minimum[i]);
+                           BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
+                           #endif
+                           state = btcmpctr_insrt_byte(minimum[i],8,&dstCnt,dst,state,&accum,0);
+                       }
+                    }
+                    if ( (chosenAlgo == BTEXPPROC) ) {
+                        // Insert 8bits of max freq symbol.
+                        state = btcmpctr_insrt_byte(minimum[0],8,&dstCnt,dst,state,&accum,0);
+                        // insert 14bits of byte length (14 to keep an even number of header bits)
+                        state = btcmpctr_insrt_byte(numBytes,8,&dstCnt,dst,state,&accum,0);
+                        state = btcmpctr_insrt_byte((numBytes>>8),6,&dstCnt,dst,state,&accum,0);
+                        // Insert 4096 bits of bitmap
+                        for(int i = 0; i < chosenAlgos4K.workingBlkSize; i++) {
+                           state = btcmpctr_insrt_byte(bitmap[i],1,&dstCnt,dst,state,&accum,0);
                         }
                     }
-                }
-                        
-                // Insert data.
-                #ifdef __BTCMPCTR__EN_DBG__
-                mDebugStr.str(""); mDebugStr << "Inserting Data";
-                BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
-                #endif
-                int dataSize = (chosenAlgo == BTEXPPROC) ? numBytes : chosenAlgos[smBlk].workingBlkSize;
-                for(int i = 0; i< dataSize; i++) {
+
+                    // Insert data.
                     #ifdef __BTCMPCTR__EN_DBG__
-                    mDebugStr.str(""); mDebugStr << "Inserting Data cnt ="<< std::to_string(i) <<" Data = "<< std::to_string(residual[i])<<", Src Data = "<< std::hex << std::to_string(*(src + srcCnt + smCntr + i));
-                    BTC_REPORT_INFO(mVerbosityLevel,6,mDebugStr.str().c_str());
+                    mDebugStr.str(""); mDebugStr << "Inserting Data";
+                    BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
                     #endif
-                    if( (args->dual_encode_en) && (chosenAlgos[smBlk].dual_encode) && bitmap[i] ) {
-                        state = btcmpctr_insrt_byte(residual[i],8,dstLen,dst,state,&accum,0);
-                    } else {
-                        state = btcmpctr_insrt_byte(residual[i],bitln,dstLen,dst,state,&accum,0);
+                    int dataSize = (chosenAlgo == BTEXPPROC) ? numBytes : chosenAlgos4K.workingBlkSize;
+                    for(int i = 0; i< dataSize; i++) {
+                        #ifdef __BTCMPCTR__EN_DBG__
+                        mDebugStr.str(""); mDebugStr << "Inserting Data cnt ="<< std::to_string(i)<<" Data = "<< std::to_string(residual[i])<< ", Src Data = "<< std::hex << std::to_string(*(src + srcCnt + i));
+                        BTC_REPORT_INFO(mVerbosityLevel,6,mDebugStr.str().c_str());
+                        #endif
+                        state = btcmpctr_insrt_byte(residual[i],bitln,&dstCnt,dst,state,&accum,0);
+                    }
+
+                } else {
+                    //---------------------------------------------------------------------------------
+                    // Chosen 64B Blocks
+                    //---------------------------------------------------------------------------------
+                    // ChosenAlgo must be re-run with to correctly generate the compressed
+                    smCntr = 0;
+                    for(int smBlk = 0; smBlk < numSmBlks ; smBlk++) {
+                        #ifdef __BTCMPCTR__EN_DBG__
+                        mDebugStr.str(""); mDebugStr << "Running chosen algo for small block count = "<< std::to_string(smBlk) <<"with blockSize = "<< std::to_string(chosenAlgos[smBlk].workingBlkSize);
+                        BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
+                        #endif
+                        if ( (chosenAlgos[smBlk].workingBlkSize < BLKSIZE) || args.bypass_en) {
+                            // Force an Algo for the last block.
+                            chosenAlgos[smBlk].none = 1;
+                            chosenAlgos[smBlk].dual_encode = 0;
+                        }
+                        if(chosenAlgos[smBlk].none != 1) {
+                            algoArg.inAry = (src + srcCnt + smCntr);
+                            algoArg.blkSize = chosenAlgos[smBlk].workingBlkSize;
+                            (this->*chosenAlgos[smBlk].chosenAlgo)(&algoArg);
+                            chosenAlgo = chosenAlgos[smBlk].algoHeader;
+                            if(chosenAlgos[smBlk].dual_encode) {
+                                // Re-run dualEncode calculate length
+                                btcmpctr_calc_dual_bitln((unsigned char*)&residual,&bitln,chosenAlgos[smBlk].workingBlkSize,(unsigned char*)bitmap,&dualCpSize);
+                            }
+                         } else {
+                            bitln = 8;
+                            for(int i = 0; i < chosenAlgos[smBlk].workingBlkSize; i++) {
+                                residual[i] = *(src + srcCnt + smCntr + i);
+                            }
+                            chosenAlgo = BITC_ALG_NONE;
+                        }
+                        // Insert Header
+                        #ifdef __BTCMPCTR__EN_DBG__
+                        mDebugStr.str(""); mDebugStr << "Inserting Header";
+                        BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
+                        #endif
+                        state = btcmpctr_insrt_hdr(chosenAlgo, bitln, &dstCnt, dst, state, &accum,0,chosenAlgos[smBlk].workingBlkSize,args.mixedBlkSize,0);
+                        // Insert Post Header bytes
+                        if(chosenAlgo != BITC_ALG_NONE) {
+                            #ifdef __BTCMPCTR__EN_DBG__
+                            mDebugStr.str(""); mDebugStr << "Inserting Header";
+                            BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
+                            #endif
+                            if(chosenAlgos[smBlk].dual_encode) {
+                                state = btcmpctr_insrt_byte(1,2,&dstCnt,dst,state,&accum,0);
+                                #ifdef DL_INC_BL
+                                // Insert the bit length
+                                //calculae the bitlength
+                                uint16_t cpBitLen = 0;
+                                for(int i = 0; i < chosenAlgos[smBlk].workingBlkSize; i++) {
+                                    cpBitLen = bitmap[i] ? cpBitLen+8 : cpBitLen+bitln;
+                                }
+                                // Insert 10 bits.
+                                state = btcmpctr_insrt_byte(cpBitLen,8,&dstCnt,dst,state,&accum,0);
+                                cpBitLen >>= 8;
+                                state = btcmpctr_insrt_byte(cpBitLen,2,&dstCnt,dst,state,&accum,0);
+                                #endif
+                            } else {
+                                state = btcmpctr_insrt_byte(0,2,&dstCnt,dst,state,&accum,0);
+                            }
+                        }
+                        if( (chosenAlgo == ADDPROC) || (chosenAlgo == SIGNSHFTADDPROC) ) {
+                            // Insert one more byte.
+                            #ifdef __BTCMPCTR__EN_DBG__
+                            mDebugStr.str(""); mDebugStr << "Inserting Header plus 1 more byte";
+                            BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
+                            #endif
+                            state = btcmpctr_insrt_byte(minimum[0],8,&dstCnt,dst,state,&accum,0);
+                        }
+                        // Insert the symbols in case of BINEXPPROC.
+                        if ( (chosenAlgo == BINEXPPROC) ) {
+                           // Insert 5 bits of numSyms
+                           int numSymsToInsrt = (numSyms == 16) && (NUMSYMSBL == 4) ? 0 : numSyms;
+                           state = btcmpctr_insrt_byte(numSymsToInsrt,NUMSYMSBL,&dstCnt,dst,state,&accum,0);
+                           // Insert the number of symbols.
+                           for(int i = 0; i < numSyms; i++) {
+                               #ifdef __BTCMPCTR__EN_DBG__
+                               mDebugStr.str(""); mDebugStr << "Inserting Binned Header "<< std::to_string(i)<<", "<< std::to_string(minimum[i]);
+                               BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
+                               #endif
+                               state = btcmpctr_insrt_byte(minimum[i],8,&dstCnt,dst,state,&accum,0);
+                           }
+                        }
+                        if ( (chosenAlgo == BTEXPPROC) ) {
+                            // Insert 8bits of max freq symbol.
+                            state = btcmpctr_insrt_byte(minimum[0],8,&dstCnt,dst,state,&accum,0);
+                            // insert 8bits of byte length (8 to keep an even number of header bits)
+                            state = btcmpctr_insrt_byte(numBytes,8,&dstCnt,dst,state,&accum,0);
+                            // Insert 64 bits of bitmap
+                            for(int i = 0; i < chosenAlgos[smBlk].workingBlkSize; i++) {
+                               state = btcmpctr_insrt_byte(bitmap[i],1,&dstCnt,dst,state,&accum,0);
+                            }
+                        }
+                        // Insert the Bitmap for dual encode
+                        if(args.dual_encode_en) {
+                            if(chosenAlgos[smBlk].dual_encode) {
+                                for(int i = 0; i < chosenAlgos[smBlk].workingBlkSize; i++) {
+                                   state = btcmpctr_insrt_byte(bitmap[i],1,&dstCnt,dst,state,&accum,0);
+                                }
+                            }
+                        }
+
+                        // Insert data.
+                        #ifdef __BTCMPCTR__EN_DBG__
+                        mDebugStr.str(""); mDebugStr << "Inserting Data";
+                        BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
+                        #endif
+                        int dataSize = (chosenAlgo == BTEXPPROC) ? numBytes : chosenAlgos[smBlk].workingBlkSize;
+                        for(int i = 0; i< dataSize; i++) {
+                            #ifdef __BTCMPCTR__EN_DBG__
+                            mDebugStr.str(""); mDebugStr << "Inserting Data cnt ="<< std::to_string(i) <<" Data = "<< std::to_string(residual[i])<<", Src Data = "<< std::hex << std::to_string(*(src + srcCnt + smCntr + i));
+                            BTC_REPORT_INFO(mVerbosityLevel,6,mDebugStr.str().c_str());
+                            #endif
+                            if( (args.dual_encode_en) && (chosenAlgos[smBlk].dual_encode) && bitmap[i] ) {
+                                state = btcmpctr_insrt_byte(residual[i],8,&dstCnt,dst,state,&accum,0);
+                            } else {
+                                state = btcmpctr_insrt_byte(residual[i],bitln,&dstCnt,dst,state,&accum,0);
+                            }
+                        }
+                        //
+                        #ifdef __BTCMPCTR__EN_DBG__
+                        mDebugStr.str(""); mDebugStr << "Destination length is "<< std::to_string(dstCnt);
+                        BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
+                        #endif
+                        smCntr += chosenAlgos[smBlk].workingBlkSize;
                     }
                 }
-                //
-                #ifdef __BTCMPCTR__EN_DBG__
-                mDebugStr.str(""); mDebugStr << "Destination length is "<< std::to_string(*dstLen);
-                BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
-                #endif
-                smCntr += chosenAlgos[smBlk].workingBlkSize;
+                srcCnt += bigBlkSize;
+                blkCnt++;
             }
+            // Insert end of stream bits.
+            #ifdef __BTCMPCTR__EN_DBG__
+            mDebugStr.str(""); mDebugStr << "Inserting End of Stream";
+            BTC_REPORT_INFO(mVerbosityLevel,6,mDebugStr.str().c_str());
+            #endif
+            state = btcmpctr_insrt_hdr(0,0,&dstCnt,dst,state,&accum,1,0,0,args.align);
+            // Check if state is non-zero, if so,  need to increment dstLen.
+            if(state != 0) {
+                #ifdef __BTCMPCTR__EN_DBG__
+                mDebugStr.str(""); mDebugStr << "ERROR: state != 0 at the end of compression";
+                BTC_REPORT_INFO(mVerbosityLevel,0,mDebugStr.str().c_str());
+                #endif
+            }
+            // All Done!!
+            dstLen = dstCnt;
+            return 1;
         }
-        srcCnt += bigBlkSize;
-        blkCnt++;
+        else {
+            BTC_REPORT_ERROR("CompressWrap: ERROR! Output buffer not big enough for worst case");
+            return 0;
+        }
     }
-    // Insert end of stream bits.
-    #ifdef __BTCMPCTR__EN_DBG__
-    mDebugStr.str(""); mDebugStr << "Inserting End of Stream";
-    BTC_REPORT_INFO(mVerbosityLevel,6,mDebugStr.str().c_str());
-    #endif
-    state = btcmpctr_insrt_hdr(0,0,dstLen,dst,state,&accum,1,0,0,args->align);    
-    // Check if state is non-zero, if so,  need to increment dstLen.
-    if(state != 0) {
-        #ifdef __BTCMPCTR__EN_DBG__
-        mDebugStr.str(""); mDebugStr << "ERROR: state != 0 at the end of compression";
-        BTC_REPORT_INFO(mVerbosityLevel,0,mDebugStr.str().c_str());
-        #endif
+    else
+    {
+        BTC_REPORT_ERROR("CompressWrap: ERROR! Null Pointer");
+        return 0;
     }
-    // All Done!!
-    return 1;
 }
 
 
 // DecompressWrap
 //This is a SWIG/numpy integration friendly interface for the decompression function.
 //
-int BitCompactor::DecompressArray(unsigned char* src,
-                                      int   srcLen,
-                             unsigned char* dst,
-                             int   dstLen, // unused
-                             btcmpctr_compress_wrap_args_t* args
-                            )
+unsigned int BitCompactor::DecompressArray(const unsigned char* const             src,
+                                            unsigned int                          srcLen,
+                                            unsigned char*                        dst,
+                                            unsigned int                          dstLen,
+                                            const btcmpctr_compress_wrap_args_t&  args
+                                 )
 {
-        int resultLen;
-        int status;
-        UNUSED(dstLen);
-        status = DecompressWrap(src,&srcLen,dst,&resultLen,args);
-        if(status) {
-            return resultLen;
-        } else {
-            return 0;
-        }
+    unsigned int resultLen = dstLen;
+    int status;
+    status = DecompressWrap(src, srcLen, dst, resultLen, args);
+    if(status) {
+        return resultLen;
+    } else {
+        return 0;
+    }
 }
 
-int BitCompactor::DecompressWrap(  unsigned char* src,
-                                        int*  srcLen,
-                               unsigned char* dst,
-                                         int* dstLen,
-                               btcmpctr_compress_wrap_args_t* args
+int BitCompactor::DecompressWrap(const unsigned char*                   src,
+                                 unsigned int                           srcLen,
+                                 unsigned char*                         dst,
+                                 unsigned int&                          dstLen,
+                                 const btcmpctr_compress_wrap_args_t&   args
                             )
 {
-    unsigned char state = 0;
-    unsigned char cmp, eofr,algo,bitln, numSyms;
-    int blkSize;
-    unsigned char bytes_to_add[MAXSYMS4K];
-    unsigned char bitmap[BIGBLKSIZE];
-    unsigned char bitmapBytes[BIGBLKSIZE];
-    int numBytes = 0;
-    int blkCnt = 0;
-    int srcLenTrk = 0;
-    *dstLen = 0;
-    mVerbosityLevel = args->verbosity;
-    int mixedBlkSize = args->mixedBlkSize;
-    int dual_encode_en = args->dual_encode_en;
-    unsigned char dual_encode;
+    if(src && dst)
+    {
+        unsigned char state = 0;
+        unsigned char cmp, eofr,algo,bitln, numSyms;
+        int blkSize;
+        unsigned char bytes_to_add[MAXSYMS4K];
+        unsigned char bitmap[BIGBLKSIZE];
+        unsigned char bitmapBytes[BIGBLKSIZE];
+        unsigned int numBytes = 0;
+        unsigned int blkCnt = 0;
+        unsigned int srcLenTrk = 0;
+        mVerbosityLevel = args.verbosity;
+        int mixedBlkSize = args.mixedBlkSize;
+        int dual_encode_en = args.dual_encode_en;
+        unsigned char dual_encode;
+        unsigned int dstCnt = 0;
 
-    while ( ( srcLenTrk < *srcLen ) ) {
-        // Extract Header
-        #ifdef __BTCMPCTR__EN_DBG__
-        mDebugStr.str(""); mDebugStr << "Extracting Header for blockCnt = "<< std::to_string(blkCnt);
-        BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
-        #endif
-        state = btcmpctr_xtrct_hdr(src,&srcLenTrk,state,&cmp,&eofr,&algo,&bitln,&blkSize,(unsigned char*)bytes_to_add,&numSyms,&numBytes,(unsigned char *)bitmap,mixedBlkSize,dual_encode_en,&dual_encode);
-        #ifdef __BTCMPCTR__EN_DBG__
-        if ( srcLenTrk > ( (*srcLen) - 1 ) && ( (*srcLen) > 0 ) )
-        {
-            // no more compressed source data to process; srcLenTrk has reached the end of the array
-            mDebugStr.str(""); mDebugStr << "src = 0x--, srcLen = "<< std::to_string(*srcLen) <<", srcLenTrk = "<< std::to_string(srcLenTrk) <<", EOFR = "<< std::to_string(eofr) <<", Compressed = "<< std::to_string(cmp) <<", Algo = "<< std::to_string(algo) <<", Bit Length = "<< std::to_string(bitln) <<", Block Size = "<< std::to_string(blkSize) << "[reached end of source data]";
-        }
-        else
-        {
-            // still more compressed source data left to process
-            mDebugStr.str(""); mDebugStr << "src = 0x" << std::hex << std::setfill('0') << std::setw(2) << std::to_string(src[srcLenTrk]) <<", srcLen = "<< std::dec << std::to_string(*srcLen) <<", srcLenTrk = "<< std::to_string(srcLenTrk) <<", EOFR = "<< std::to_string(eofr) <<", Compressed = "<< std::to_string(cmp) <<", Algo = "<< std::to_string(algo) <<", Bit Length = "<< std::to_string(bitln) <<", Block Size = "<< std::to_string(blkSize);
-        }
-        BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
-        #endif
-        
-        // if we're at EOFR, OR if srcLenTrk has reached the end of
-        // the compressed source data, stop processing at this point
-        // (the 'while' loop condition should then cause us to finish)
-        if( ( srcLenTrk > ( (*srcLen) - 1 ) ) || eofr )
-        {
-            continue;
-        }
-        //
-        if(cmp) {
-            //Compressed block. Process further based on Algo
+        while ( ( srcLenTrk < srcLen ) ) {
+            // Extract Header
             #ifdef __BTCMPCTR__EN_DBG__
-            mDebugStr.str(""); mDebugStr << "Compressed Block, Extracting data";
+            mDebugStr.str(""); mDebugStr << "Extracting Header for blockCnt = "<< std::to_string(blkCnt);
             BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
             #endif
-            if ( algo == BTEXPPROC ) {
-                // bitln set to 0, since we always extract 8bits for the non high freq calculations.
-                state = btcmpctr_xtrct_bytes(src,&srcLenTrk,state,0,bitmapBytes,numBytes,0);
-            } else {
-                if(dual_encode) {
-                    state = btcmpctr_xtrct_bytes_wbitmap(src,&srcLenTrk,state,bitln,(dst+*dstLen),blkSize,(unsigned char *)bitmap);
+            state = btcmpctr_xtrct_hdr(src,&srcLenTrk,state,&cmp,&eofr,&algo,&bitln,&blkSize,(unsigned char*)bytes_to_add,&numSyms,&numBytes,(unsigned char *)bitmap,mixedBlkSize,dual_encode_en,&dual_encode);
+            #ifdef __BTCMPCTR__EN_DBG__
+            if ( srcLenTrk > ( (srcLen) - 1 ) && ( (srcLen) > 0 ) )
+            {
+                // no more compressed source data to process; srcLenTrk has reached the end of the array
+                mDebugStr.str(""); mDebugStr << "src = 0x--, srcLen = "<< std::to_string(srcLen) <<", srcLenTrk = "<< std::to_string(srcLenTrk) <<", EOFR = "<< std::to_string(eofr) <<", Compressed = "<< std::to_string(cmp) <<", Algo = "<< std::to_string(algo) <<", Bit Length = "<< std::to_string(bitln) <<", Block Size = "<< std::to_string(blkSize) << "[reached end of source data]";
+            }
+            else
+            {
+                // still more compressed source data left to process
+                mDebugStr.str(""); mDebugStr << "src = 0x" << std::hex << std::setfill('0') << std::setw(2) << std::to_string(src[srcLenTrk]) <<", srcLen = "<< std::dec << std::to_string(srcLen) <<", srcLenTrk = "<< std::to_string(srcLenTrk) <<", EOFR = "<< std::to_string(eofr) <<", Compressed = "<< std::to_string(cmp) <<", Algo = "<< std::to_string(algo) <<", Bit Length = "<< std::to_string(bitln) <<", Block Size = "<< std::to_string(blkSize);
+            }
+            BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
+            #endif
+
+            // if we're at EOFR, OR if srcLenTrk has reached the end of
+            // the compressed source data, stop processing at this point
+            // (the 'while' loop condition should then cause us to finish)
+            if( ( srcLenTrk > ( (srcLen) - 1 ) ) || eofr )
+            {
+                continue;
+            }
+            //
+            if(cmp) {
+                //Compressed block. Process further based on Algo
+                #ifdef __BTCMPCTR__EN_DBG__
+                mDebugStr.str(""); mDebugStr << "Compressed Block, Extracting data";
+                BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
+                #endif
+                if ( algo == BTEXPPROC ) {
+                    // bitln set to 0, since we always extract 8bits for the non high freq calculations.
+                    state = btcmpctr_xtrct_bytes(src,&srcLenTrk,state,0,bitmapBytes,numBytes,0);
                 } else {
-                    state = btcmpctr_xtrct_bytes(src,&srcLenTrk,state,bitln,(dst+*dstLen),blkSize,0);
-                }
-            }
-            if ( (algo == SIGNSHFTADDPROC) || (algo == SIGNSHFTPROC) ) {
-                // Convert to signed
-                #ifdef __BTCMPCTR__EN_DBG__
-                mDebugStr.str(""); mDebugStr << "Converting to Signed form";
-                BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
-                #endif
-                btcmpctr_tosigned((dst+*dstLen),(dst+*dstLen));
-            }
-            // Add any bytes.
-            if ( (algo == ADDPROC) || (algo == SIGNSHFTADDPROC) ) {
-                // add bytes_to_add
-                #ifdef __BTCMPCTR__EN_DBG__
-                mDebugStr.str(""); mDebugStr << "Adding Data";
-                BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
-                #endif
-                btcmpctr_addByte((unsigned char*)bytes_to_add,0,(dst+*dstLen));
-            }
-            // Reconstruct bitmap by using lookup into bytes_to_add vector.
-            if ( (algo == BINEXPPROC) ) {
-                for(int i = 0; i < blkSize; i++) {
-                    *(dst+*dstLen+i) = bytes_to_add[*(dst+*dstLen+i)];
-                }
-            }
-            if ( (algo == BTEXPPROC) ) {
-                // Extract numBytes from 
-                int cnt = 0;
-                for(int i = 0; i < blkSize; i ++) {
-                    if(!bitmap[i]) {
-                        *(dst+*dstLen+i) = bytes_to_add[0];
+                    if(dual_encode) {
+                        state = btcmpctr_xtrct_bytes_wbitmap(src,&srcLenTrk,state,bitln,(dst+dstCnt),blkSize,(unsigned char *)bitmap);
                     } else {
-                        *(dst+*dstLen+i) = bitmapBytes[cnt++];
+                        state = btcmpctr_xtrct_bytes(src,&srcLenTrk,state,bitln,(dst+dstCnt),blkSize,0);
                     }
                 }
-                //assert cnt == numBytes;
+                if ( (algo == SIGNSHFTADDPROC) || (algo == SIGNSHFTPROC) ) {
+                    // Convert to signed
+                    #ifdef __BTCMPCTR__EN_DBG__
+                    mDebugStr.str(""); mDebugStr << "Converting to Signed form";
+                    BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
+                    #endif
+                    btcmpctr_tosigned((dst+dstCnt),(dst+dstCnt));
+                }
+                // Add any bytes.
+                if ( (algo == ADDPROC) || (algo == SIGNSHFTADDPROC) ) {
+                    // add bytes_to_add
+                    #ifdef __BTCMPCTR__EN_DBG__
+                    mDebugStr.str(""); mDebugStr << "Adding Data";
+                    BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
+                    #endif
+                    btcmpctr_addByte((unsigned char*)bytes_to_add,0,(dst+dstCnt));
+                }
+                // Reconstruct bitmap by using lookup into bytes_to_add vector.
+                if ( (algo == BINEXPPROC) ) {
+                    for(int i = 0; i < blkSize; i++) {
+                        *(dst+dstCnt+i) = bytes_to_add[*(dst+dstCnt+i)];
+                    }
+                }
+                if ( (algo == BTEXPPROC) ) {
+                    // Extract numBytes from
+                    int cnt = 0;
+                    for(int i = 0; i < blkSize; i ++) {
+                        if(!bitmap[i]) {
+                            *(dst+dstCnt+i) = bytes_to_add[0];
+                        } else {
+                            *(dst+dstCnt+i) = bitmapBytes[cnt++];
+                        }
+                    }
+                    //assert cnt == numBytes;
+                }
+            } else {
+                // Uncompressed block
+                #ifdef __BTCMPCTR__EN_DBG__
+                mDebugStr.str(""); mDebugStr << "Uncompressed Data block..";
+                BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
+                #endif
+                state = btcmpctr_xtrct_bytes(src,&srcLenTrk,state,bitln,(dst+dstCnt),blkSize,0);
             }
-        } else {
-            // Uncompressed block
+
+            dstCnt += blkSize;
+            if (dstCnt > dstLen) {
+                BTC_REPORT_ERROR("DeompressWrap: Max expected decompress size " + std::to_string(dstLen) + " bytes exceeded!");
+                return 0;
+            }
+
             #ifdef __BTCMPCTR__EN_DBG__
-            mDebugStr.str(""); mDebugStr << "Uncompressed Data block..";
+            mDebugStr.str(""); mDebugStr << "Src length = "<< std::to_string(srcLenTrk);
             BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
             #endif
-            state = btcmpctr_xtrct_bytes(src,&srcLenTrk,state,bitln,(dst+*dstLen),blkSize,0);
+            blkCnt++;
         }
-        (*dstLen) += blkSize;
-        #ifdef __BTCMPCTR__EN_DBG__
-        mDebugStr.str(""); mDebugStr << "Src length = "<< std::to_string(srcLenTrk);
-        BTC_REPORT_INFO(mVerbosityLevel,5,mDebugStr.str().c_str());
-        #endif
-        blkCnt++;
+        // All Done!!
+        dstLen = dstCnt;
+        return 1;
     }
-    return 1;
-
-
+    else
+    {
+        BTC_REPORT_ERROR("DecompressWrap: ERROR! Null Pointer");
+        return 0;
+    }
 }
 
-int BitCompactor::btcmpctr_cmprs_bound(int bufSize) 
+unsigned int BitCompactor::GetCompressedSizeBound(unsigned int bufSize) const
 {
     return ceil(((ceil(bufSize/BLKSIZE) * 4) + 2)/8) + bufSize + 1 + 64;
 }
@@ -1675,13 +1735,4 @@ BitCompactor::elem_type BitCompactor::getMedianNaive(elem_type arr[], unsigned i
 
     return medianValue;
 }
-
-unsigned int BitCompactor::getDecodeErrorCount()
-{
-    return 0; // TBD: implement error counting for decompress/compress
-}
-
-unsigned int BitCompactor::getEncodeErrorCount()
-{
-    return 0; // TBD: implement error counting for decompress/compress
-}
+} // namespace btc27
