@@ -82,10 +82,8 @@ namespace btc27
 BitCompactor::BitCompactor() :
         mVerbosityLevel(0)
 {
-}
-
-BitCompactor::~BitCompactor()
-{
+    std::fill_n(AlgoAry, BTC27_NUMALGO, &BitCompactor::btcmpctr_dummyprdct);
+    std::fill_n(AlgoAry4K, BTC27_NUM4KALGO, &BitCompactor::btcmpctr_dummyprdct);
 }
 
 unsigned char BitCompactor::btcmpctr_insrt_byte( unsigned char  byte,
@@ -210,7 +208,7 @@ unsigned char BitCompactor::btcmpctr_insrt_hdr(int chosenAlgo,
     // If eofr, then 2 bit is inserted witha value of '10'
     // else if no compression is done, then 1 bits are inserted '0'
     // else 8 bits are inserted '<3 bits bitln><3 bits algo><01>' --> [7:0] if algo != 16bit modes
-    bool is16bitmode = 0;
+    const bool is16bitmode = 0;
     bool is4K        = (workingBlkSize == BIGBLKSIZE);
     bool isLastBlk    = (workingBlkSize != BLKSIZE) & !is4K;
 
@@ -1087,9 +1085,6 @@ BitCompactor::btcmpctr_algo_choice_t BitCompactor::btcmpctr_ChooseAlgo64B(btcmpc
         (this->*AlgoAry[i])(algoArg);
         // If BTMAP_IDX then multiple is numBytes
         int numBytes = workingBlkSize;
-        if(i == BTMAP_IDX) {
-            numBytes = *(algoArg->numBytes);
-        }
         cmprsdSize = AlgoAryHeaderOverhead[i] + (numBytes * (*(algoArg->bitln))) ;
         if((dual_encode_en) & (i != BTMAP4K_IDX) ) {
             btcmpctr_calc_dual_bitln(algoArg->residual,&dualBitln,workingBlkSize,(unsigned char*)bitmap,&dualCpSize);
@@ -1098,12 +1093,6 @@ BitCompactor::btcmpctr_algo_choice_t BitCompactor::btcmpctr_ChooseAlgo64B(btcmpc
             #else
             cmprsdSizeDual = AlgoAryHeaderOverhead[i] + dualCpSize + 64 ;
             #endif
-        }
-        if(i == BINCMPCT_IDX) {
-            cmprsdSize += ((*(algoArg->numSyms))*8);
-            if(dual_encode_en) {
-                cmprsdSizeDual += ((*(algoArg->numSyms))*8);
-            }
         }
         #ifdef __BTCMPCTR__EN_DBG__
         mDebugStr.str(""); mDebugStr << "Compressed Size in bits is  "<< std::to_string(cmprsdSize);
@@ -1258,7 +1247,7 @@ int BitCompactor::CompressWrap(const unsigned char*                 src,
             int numBytes;
             unsigned int accum = 0;
             btcmpctr_algo_args_t algoArg;
-            btcmpctr_algo_choice_t chosenAlgos[BIGBLKSIZE/BLKSIZE];
+            btcmpctr_algo_choice_t chosenAlgos[BIGBLKSIZE/BLKSIZE] = {0};
             btcmpctr_algo_choice_t chosenAlgos4K = {};
             int smCntr = 0;
             int numSmBlks = 0;
