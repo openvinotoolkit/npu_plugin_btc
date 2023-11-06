@@ -58,7 +58,6 @@ public:
     } btcmpctr_compress_wrap_args_t;
 
     BitCompactor();
-    ~BitCompactor();
 
     BitCompactor(const BitCompactor &) = delete;
     BitCompactor& operator= (const BitCompactor &) = delete;
